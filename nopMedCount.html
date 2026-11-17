@@ -85,11 +85,39 @@ if(location.pathname.toLowerCase().indexOf('/nopmedcount/') !== -1){
     font-size:14px;
   }
   .msg.warn{ border-color:var(--warn); color:var(--warn); }
+  .nav-back{
+    display:inline-block;
+    margin:0 0 8px;
+    padding:0;
+    border:none;
+    background:none;
+    font-size:14px;
+    font-weight:600;
+    cursor:pointer;
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <section id="viewStart" class="view">
+  <section id="viewLogin" class="view">
+    <h1>Inloggning</h1>
+    <div id="loginMessages"></div>
+    <div class="panel">
+      <p class="quiet">Välj en användare, eller skapa en ny.</p>
+      <ul id="userList"></ul>
+      <form id="userForm">
+        <label>Ny användare
+          <input id="newUserName" name="name" autocomplete="off" maxlength="200">
+        </label>
+        <div class="row">
+          <button type="submit">Skapa</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <section id="viewStart" class="view" hidden>
+    <button class="nav-back" id="startBackBtn" type="button">← Inloggning</button>
     <h1>nopMedCount</h1>
     <div id="startMessages"></div>
     <div class="panel">
@@ -109,7 +137,7 @@ if(location.pathname.toLowerCase().indexOf('/nopmedcount/') !== -1){
 
   <section id="viewPost" class="view" hidden>
     <div class="row">
-      <button type="button" id="backStart">Tillbaka</button>
+      <button class="nav-back" id="backStart" type="button">← Start</button>
     </div>
     <h1 id="postHeading"></h1>
     <div id="postMessages"></div>
@@ -127,7 +155,7 @@ if(location.pathname.toLowerCase().indexOf('/nopmedcount/') !== -1){
 
   <section id="viewBackup" class="view" hidden>
     <div class="row">
-      <button type="button" id="backFromBackup">Tillbaka</button>
+      <button class="nav-back" id="backFromBackup" type="button">← Start</button>
     </div>
     <h1>Säkerhetskopia</h1>
     <p class="quiet">Programmet startar utan mappfråga. JSON-filerna är den riktiga kopian. Välj en mapp, till exempel i Google Drive. Programfilen behöver inte ligga där. Samma mapp används på datorn och i telefonen.</p>
@@ -147,7 +175,7 @@ if(location.pathname.toLowerCase().indexOf('/nopmedcount/') !== -1){
 (function(){
 'use strict';
 
-const APP_VERSION = '2026-11-17 v10';
+const APP_VERSION = '2026-11-17 v11';
 const PROGRAM_FILE_NAME = 'nopMedCount.html';
 const POST_FORMAT = 'nopmedcount-post';
 const POST_FORMAT_VERSION = 1;
@@ -208,7 +236,7 @@ let nameTimer = 0;
 const el = id => document.getElementById(id);
 
 function emptyRegistry(){
-  return { order: [], active: '', names: {}, fileIds: [], nextNum: 1 };
+  return { order: [], active: '', names: {}, fileIds: [], nextNum: 1, users: [], activeUser: '', nextUserNum: 1 };
 }
 
 function readRegistry(){
@@ -218,6 +246,9 @@ function readRegistry(){
       if(!Array.isArray(raw.fileIds)) raw.fileIds = [];
       if(typeof raw.nextNum !== 'number' || raw.nextNum < 1) raw.nextNum = 1;
       if(typeof raw.active !== 'string') raw.active = '';
+      if(!Array.isArray(raw.users)) raw.users = [];
+      if(typeof raw.activeUser !== 'string') raw.activeUser = '';
+      if(typeof raw.nextUserNum !== 'number' || raw.nextUserNum < 1) raw.nextUserNum = 1;
       return raw;
     }
   } catch(e){ /* saknas eller skadat */ }
@@ -313,11 +344,59 @@ function showMessages(node, items){
 }
 
 function show(name){
-  ['viewStart', 'viewPost', 'viewBackup'].forEach(id => {
+  ['viewLogin', 'viewStart', 'viewPost', 'viewBackup'].forEach(id => {
     el(id).hidden = id !== name;
   });
+  if(name === 'viewLogin') renderLogin();
   if(name === 'viewStart') renderStart();
   if(name === 'viewPost') renderPost();
+}
+
+function activeUserRecord(){
+  return (reg.users || []).find(u => u.id === reg.activeUser) || null;
+}
+
+function allocUserId(){
+  let n = reg.nextUserNum || 1;
+  let id = '';
+  const ids = (reg.users || []).map(u => u.id);
+  do{
+    id = 'u' + n;
+    n += 1;
+  } while(ids.indexOf(id) !== -1);
+  reg.nextUserNum = n;
+  return id;
+}
+
+function userNameTaken(name, exceptId){
+  const wanted = String(name || '').toLowerCase();
+  return (reg.users || []).some(u => u.id !== exceptId && String(u.name || '').toLowerCase() === wanted);
+}
+
+function chooseUser(id){
+  reg.activeUser = id;
+  writeRegistry(reg);
+  show('viewStart');
+}
+
+function renderLogin(){
+  const list = el('userList');
+  list.textContent = '';
+  const users = reg.users || [];
+  if(!users.length){
+    const li = document.createElement('li');
+    li.textContent = 'Inga användare ännu.';
+    list.appendChild(li);
+  }
+  users.forEach(user => {
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = user.name || user.id;
+    btn.addEventListener('click', () => chooseUser(user.id));
+    li.appendChild(btn);
+    list.appendChild(li);
+  });
 }
 
 function renderStart(){
@@ -823,6 +902,26 @@ el('createForm').addEventListener('submit', async e => {
   }
 });
 
+el('userForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const name = el('newUserName').value;
+  const problem = nameProblem(name) || (userNameTaken(name, '') ? 'Det finns redan en användare med det namnet.' : '');
+  if(problem){
+    showMessages(el('loginMessages'), [{ text: problem, warn: true }]);
+    return;
+  }
+  if(!Array.isArray(reg.users)) reg.users = [];
+  const id = allocUserId();
+  reg.users.push({ id: id, name: name });
+  reg.activeUser = id;
+  writeRegistry(reg);
+  el('newUserName').value = '';
+  showMessages(el('loginMessages'), []);
+  show('viewStart');
+});
+
+el('startBackBtn').addEventListener('click', () => show('viewLogin'));
+
 el('goBackup').addEventListener('click', () => {
   showMessages(el('backupMessages'), []);
   show('viewBackup');
@@ -907,11 +1006,8 @@ async function init(){
   const notes = (result.warnings || []).slice();
   if(result.timedOut) notes.push('Filkontrollen tog för lång tid. Programmet visas ändå.');
   if(notes.length) showMessages(el('startMessages'), notes.map(text => ({ text: text, warn: true })));
-  if(reg.active && reg.order.indexOf(reg.active) !== -1){
-    await openPost(reg.active, false);
-    return;
-  }
-  show('viewStart');
+  if(activeUserRecord()) show('viewStart');
+  else show('viewLogin');
 }
 
 init();
